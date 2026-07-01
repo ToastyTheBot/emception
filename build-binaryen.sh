@@ -57,6 +57,11 @@ if [ ! -d $BINARYEN_BUILD/ ]; then
     # Because of that, we need to disable LTO.
     sed -i -E 's/-flto//g' $BINARYEN_BUILD/build.ninja
 
+    # emsdk 3.1.74 deprecates the exported runtime method allocateUTF8, which em++
+    # emits as a -Wjs-compiler warning. Binaryen builds with -Werror, so that
+    # otherwise-harmless deprecation becomes a fatal link error. Drop -Werror.
+    sed -i -E 's/-Werror//g' $BINARYEN_BUILD/build.ninja
+
     # Binaryen builds with NODERAWFS, which is not compatible with browser workflows.
     # Disable it.
     sed -i -E 's/-s\s*NODERAWFS(\s*=\s*[^ ]*)?//g' $BINARYEN_BUILD/build.ninja

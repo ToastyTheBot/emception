@@ -60,7 +60,7 @@ if [ ! -d $LLVM_BUILD/ ]; then
     " emcmake cmake -G Ninja \
         -S $LLVM_SRC/llvm/ \
         -B $LLVM_BUILD/ \
-        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_BUILD_TYPE=MinSizeRel \
         -DLLVM_TARGETS_TO_BUILD=WebAssembly \
         -DLLVM_ENABLE_PROJECTS="clang;lld;clang-tools-extra" \
         -DLLVM_ENABLE_DUMP=OFF \
@@ -95,4 +95,4 @@ if [ ! -d $LLVM_BUILD/ ]; then
     cat $TMP_FILE >> $LLVM_BUILD/build.ninja
     popd
 fi
-cmake --build $LLVM_BUILD/ -- llvm-box
+cmake --build $LLVM_BUILD/ -j 1 -- llvm-box

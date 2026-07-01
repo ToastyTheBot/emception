@@ -44,11 +44,12 @@ EXT=".pack"
 if [ "$EMCEPTION_NO_COMPRESS" != "1" ]; then
     # Use brotli compressed packages
     EXT=".pack.br"
+    # Compress sequentially: brotli --best is memory-hungry, and running one per
+    # pack in parallel OOMs under a constrained container memory cap.
     for PACK in $BUILD/emception/packages/*.pack; do
         PACK=$(basename $PACK .pack)
-        brotli --best --keep $BUILD/emception/packages/$PACK.pack &
+        brotli --best --force $BUILD/emception/packages/$PACK.pack -o $BUILD/emception/packages/$PACK.pack.br
     done
-    wait
 fi
 
 IMPORTS=""

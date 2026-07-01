@@ -1,6 +1,7 @@
 # This is the last tested version of emscripten.
 # Feel free to try with a newer version
-FROM emscripten/emsdk:3.1.24
+# --- upgrade spike: bumped 3.1.24 -> 3.1.74 (see docs/emception-upgrade-spike.md)
+FROM emscripten/emsdk:3.1.74
 
 RUN DEBIAN_FRONTEND=noninteractive apt --no-install-recommends -qy update && \
     DEBIAN_FRONTEND=noninteractive apt --no-install-recommends -qy install \
