@@ -49,6 +49,13 @@ fi
 cmake --build $LLVM_NATIVE/ -- llvm-tblgen clang-tblgen
 
 if [ ! -d $LLVM_BUILD/ ]; then
+    # LLVM 20 (322eb1a): WASM has no plugin/dlopen support, and with
+    # LLVM_ENABLE_PLUGINS defined, LLVM 20's new LLVM_ABI export-annotation
+    # macros (Support/Compiler.h) enter an export code path whose only WASM
+    # branch tests __WASM__ (uppercase — emscripten defines __wasm__ lowercase),
+    # leaving LLVM_ABI undefined and breaking every annotated header
+    # (e.g. `class LLVM_ABI MachineFunction`). Disabling plugins selects the
+    # empty LLVM_ABI. See docs/emception-upgrade-spike.md.
     CXXFLAGS="-Dwait4=__syscall_wait4" \
     LDFLAGS="\
         -s LLD_REPORT_UNDEFINED=1 \
@@ -70,6 +77,7 @@ if [ ! -d $LLVM_BUILD/ ]; then
         -DLLVM_BUILD_TOOLS=OFF \
         -DLLVM_ENABLE_THREADS=OFF \
         -DLLVM_BUILD_LLVM_DYLIB=OFF \
+        -DLLVM_ENABLE_PLUGINS=OFF \
         -DLLVM_INCLUDE_TESTS=OFF \
         -DLLVM_TABLEGEN=$LLVM_NATIVE/bin/llvm-tblgen \
         -DCLANG_TABLEGEN=$LLVM_NATIVE/bin/clang-tblgen
@@ -95,4 +103,7 @@ if [ ! -d $LLVM_BUILD/ ]; then
     cat $TMP_FILE >> $LLVM_BUILD/build.ninja
     popd
 fi
-cmake --build $LLVM_BUILD/ -j 1 -- llvm-box
+# -j defaults to 1 (the safe floor for the historic 8GB-peak Release build). At
+# MinSizeRel with a WebAssembly-only backend, per-file peak RAM is low, so a
+# capped container can afford more parallelism — override with LLVM_BOX_JOBS.
+cmake --build $LLVM_BUILD/ -j ${LLVM_BOX_JOBS:-1} -- llvm-box
