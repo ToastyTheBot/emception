@@ -1,8 +1,8 @@
 diff --git a/clang/lib/Driver/Job.cpp b/clang/lib/Driver/Job.cpp
-index c34ae13a5fc5..bef644609ce5 100644
+index ae2f1cd1f..b4ebc179a 100644
 --- a/clang/lib/Driver/Job.cpp
 +++ b/clang/lib/Driver/Job.cpp
-@@ -400,8 +400,8 @@ int CC1Command::Execute(ArrayRef<llvm::Optional<StringRef>> Redirects,
+@@ -409,8 +409,8 @@ int CC1Command::Execute(ArrayRef<std::optional<StringRef>> Redirects,
    // FIXME: Currently, if there're more than one job, we disable
    // -fintegrate-cc1. If we're no longer a integrated-cc1 job, fallback to
    // out-of-process execution. See discussion in https://reviews.llvm.org/D74447
@@ -14,10 +14,10 @@ index c34ae13a5fc5..bef644609ce5 100644
    PrintFileNames();
  
 diff --git a/clang/tools/driver/CMakeLists.txt b/clang/tools/driver/CMakeLists.txt
-index e233ee716808..146f31da7d70 100644
+index a4debc2dd..53d94f52d 100644
 --- a/clang/tools/driver/CMakeLists.txt
 +++ b/clang/tools/driver/CMakeLists.txt
-@@ -47,7 +47,7 @@ clang_target_link_libraries(clang
+@@ -53,7 +53,7 @@ clang_target_link_libraries(clang
  if(WIN32 AND NOT CYGWIN)
    # Prevent versioning if the buildhost is targeting for Win32.
  else()

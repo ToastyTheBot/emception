@@ -24,9 +24,9 @@ if [ ! -d $LLVM_SRC/ ]; then
 
     pushd $LLVM_SRC/
     
-    # This is the last tested commit of llvm-project.
-    # Feel free to try with a newer version
-    COMMIT=d5a963ab8b40fcf7a99acd834e5f10a1a30cc2e5
+    # llvm-project revision matching emsdk 3.1.74 (clang 20.0.0git). Previously
+    # d5a963ab (LLVM 16, for emsdk 3.1.24/3.1.30). Bumped for the LLVM 20 upgrade.
+    COMMIT=322eb1a92e6d4266184060346616fa0dbe39e731
     git fetch origin $COMMIT
     git reset --hard $COMMIT
 
