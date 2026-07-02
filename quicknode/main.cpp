@@ -22,6 +22,7 @@ class QuickNode {
     qjs::Runtime m_runtime;
     qjs::Context m_context;
     std::map<fs::path, qjs::Value> m_require_cache;
+    bool m_unhandled_rejection = false;
 
   public:
     QuickNode(std::string version)
@@ -31,6 +32,7 @@ class QuickNode {
       , m_require_cache{}
     {
         m_context.onUnhandledPromiseRejection = [this](qjs::Value exc){
+            m_unhandled_rejection = true;
             std::cerr << "Unhandled promise rejection: ";
             dump_exception();
         };
@@ -41,7 +43,10 @@ class QuickNode {
         add_assert();
         add_fs();
         add_path();
+        setup_modules();
     }
+
+    bool hadRejection() const { return m_unhandled_rejection; }
 
     bool execute_jobs() {
         bool success = true;
@@ -83,6 +88,43 @@ class QuickNode {
         try {
             auto code = readFile(filename);
             m_context.eval(code, filename, JS_EVAL_TYPE_GLOBAL);
+            return true;
+        } catch(qjs::exception const & exc) {
+            std::cerr << "Unhandled exception: ";
+            dump_exception();
+        } catch(std::exception const & e) {
+            std::cerr << "Unhandled native exception: ";
+            std::cerr << e.what() << "\n";
+        }
+        return false;
+    }
+
+    // Evaluate an ES module (emscripten 3.1.74 ships src/compiler.mjs as ESM).
+    // quicknode's require()/evalFile() are CommonJS-only, so .mjs entries are
+    // compiled as modules with import.meta.url set; node: builtins are served by
+    // the module loader installed in setup_modules().
+    bool evalModule(const char * filename) {
+        try {
+            auto buf = qjs::detail::readFile(filename);
+            if (!buf) throw std::runtime_error(std::string("Cannot read module: ") + filename);
+            std::string code = std::move(*buf);
+            if (code.size() >= 2 && code[0] == '#' && code[1] == '!') {
+                auto nl = code.find('\n');
+                code = (nl == std::string::npos) ? std::string{} : code.substr(nl + 1);
+            }
+            JSContext * c = m_context.ctx;
+            JSValue func = JS_Eval(c, code.c_str(), code.size(), filename,
+                                   JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
+            if (JS_IsException(func)) { dump_exception(); return false; }
+            JSModuleDef * md = reinterpret_cast<JSModuleDef *>(JS_VALUE_GET_PTR(func));
+            JSValue meta = JS_GetImportMeta(c, md);
+            std::string uri = qjs::detail::toUri(filename);
+            JS_SetPropertyStr(c, meta, "url", JS_NewString(c, uri.c_str()));
+            JS_SetPropertyStr(c, meta, "main", JS_TRUE);
+            JS_FreeValue(c, meta);
+            JSValue ret = JS_EvalFunction(c, func); // consumes func; returns module eval promise
+            if (JS_IsException(ret)) { dump_exception(); JS_FreeValue(c, ret); return false; }
+            JS_FreeValue(c, ret);
             return true;
         } catch(qjs::exception const & exc) {
             std::cerr << "Unhandled exception: ";
@@ -235,6 +277,79 @@ class QuickNode {
         m_require_cache.insert({"process", process});
     }
 
+    // Install ESM support for the node: builtins emscripten 3.1.74's compiler.mjs
+    // imports (fs/path/url/vm/assert). The heavy fs/path bits reuse the existing C
+    // builtins; url/vm/URL are JS shims. vm is a SHARED-GLOBAL shim: emscripten's
+    // applySettings() funnels settings into globalThis anyway (old emception ran
+    // macros in the shared global via runInThisContext), so real context isolation
+    // is unnecessary.
+    void setup_modules() {
+        auto qn = m_context.newObject();
+        m_context.global()["__qn"] = qn;
+        qn["fs"]      = m_require_cache.at("fs");
+        qn["path"]    = m_require_cache.at("path");
+        qn["assert"]  = m_require_cache.at("assert");
+        qn["process"] = (qjs::Value) m_context.global()["process"];
+        qn["console"] = (qjs::Value) m_context.global()["console"];
+
+        eval(R"JS(
+(function(){
+  const q = globalThis.__qn;
+  const p = q.path;
+  if (!p.dirname)  p.dirname  = (s)=>{ s=String(s).replace(/\/+$/,''); const i=s.lastIndexOf('/'); return i<0?'.':(i===0?'/':s.slice(0,i)); };
+  if (!p.basename) p.basename = (s,ext)=>{ s=String(s).replace(/\/+$/,''); let b=s.slice(s.lastIndexOf('/')+1); if(ext&&b.endsWith(ext)) b=b.slice(0,-ext.length); return b; };
+  q.url = {
+    fileURLToPath:(u)=>{ let s=(typeof u==='string')?u:((u&&u.href)?u.href:String(u)); return s.startsWith('file://')?decodeURIComponent(s.slice(7)):s; },
+    pathToFileURL:(x)=>{ const href='file://'+String(x); return {href, toString(){return href;}}; },
+  };
+  globalThis.URL = class URL {
+    constructor(input, base){ input=String(input);
+      if (input.includes('://')){ this.href=input; return; }
+      let b=base?String(base):''; let sc=b.startsWith('file://')?'file://':''; let bp=sc?b.slice(sc.length):b;
+      let dir=bp.replace(/[^/]*$/,''); let res=dir+input; let out=[];
+      for (const seg of res.split('/')){ if(seg==='.'||seg===''){ if(seg===''&&out.length===0) out.push(''); continue;} if(seg==='..'){ if(out.length>1) out.pop(); continue;} out.push(seg);}
+      let norm=out.join('/'); if(res.endsWith('/')&&!norm.endsWith('/')) norm+='/'; this.href=(sc||'file://')+norm; }
+    toString(){ return this.href; } get pathname(){ return this.href.replace(/^file:\/\//,''); }
+  };
+  // vm shim: emscripten's compiler evaluates its OWN trusted settings.js and
+  // library-JS macros via node:vm — indirect eval mirrors Node's runInContext in
+  // the shared global (as the prior emception shim did). Sandboxed inside WASM.
+  const iEval = eval;
+  q.vm = {
+    createContext:(o)=>{ o=o||{}; Object.assign(globalThis,o); return o; },
+    runInThisContext:(code)=>iEval(String(code)),
+    runInContext:(code,ctx)=>{ if(ctx) Object.assign(globalThis,ctx); return iEval(String(code)); },
+    runInNewContext:(code,ctx)=>{ if(ctx) Object.assign(globalThis,ctx); return iEval(String(code)); },
+  };
+})();
+)JS");
+
+        m_context.moduleLoader = [](std::string_view name) -> qjs::Context::ModuleData {
+            std::string n{name};
+            std::string bare = n;
+            if (bare.rfind("node:", 0) == 0) bare = bare.substr(5);
+            static const std::map<std::string, std::vector<std::string>> exports = {
+                {"fs",      {"existsSync","readFileSync","writeFileSync"}},
+                {"path",    {"join","normalize","isAbsolute","dirname","basename"}},
+                {"url",     {"fileURLToPath","pathToFileURL"}},
+                {"vm",      {"createContext","runInContext","runInNewContext","runInThisContext"}},
+                {"assert",  {}},
+                {"process", {}},
+                {"console", {}},
+            };
+            auto it = exports.find(bare);
+            if (it != exports.end()) {
+                std::string src = "const m = globalThis.__qn['" + bare + "'];\nexport default m;\n";
+                for (auto const & e : it->second)
+                    src += "export const " + e + " = m." + e + ";\n";
+                return qjs::Context::ModuleData{ std::string("node:") + bare, src };
+            }
+            auto buf = qjs::detail::readFile(n);
+            if (!buf) return qjs::Context::ModuleData{};
+            return qjs::Context::ModuleData{ qjs::detail::toUri(n), *buf };
+        };
+    }
+
     std::string readFile(std::string const & file) {
         auto canonical = fs::weakly_canonical(file);
         auto buf = qjs::detail::readFile(canonical);
@@ -332,7 +447,9 @@ int main(int argc, char ** argv) {
     if (argc == 3 && argv[1] == std::string_view{"-e"}) {
         success = success && qn.eval(argv[2]);
     } else if (argc >= 2 && argv[1][0] != '-') {
-        success = success && qn.evalFile(argv[1]);
+        std::string f = argv[1];
+        bool isModule = f.size() > 4 && f.compare(f.size() - 4, 4, ".mjs") == 0;
+        success = success && (isModule ? qn.evalModule(argv[1]) : qn.evalFile(argv[1]));
     } else if (argc == 2 && argv[1] == std::string_view{"--version"}) {
         std::cout << "v" << qn.version() << "\n";
         return 0;
@@ -347,6 +464,7 @@ int main(int argc, char ** argv) {
     }
 
     success = success && qn.execute_jobs();
+    if (qn.hadRejection()) success = false;
 
     return success ? 0 : 1;
 }
