@@ -33,7 +33,7 @@ export default class EmProcess extends AsyncInitializable(Process) {
                 },
             }
         };
-        this._module = await new Module({
+        this._module = await Module({
             ...opts,
             ...fsroot,
             noInitialRun: true,
@@ -64,6 +64,11 @@ export default class EmProcess extends AsyncInitializable(Process) {
         FS.ErrnoError = class ErrnoError extends Error {
             constructor(errno, node) {
                 super(`FS error: ${ERRNO_CODES[errno]}`);
+                // emscripten 3.1.74 syscall wrappers catch by e.name === "ErrnoError";
+                // the default subclass name is "Error", so ordinary "file not found"
+                // probes (which em++ does constantly, shared across modules via PROXYFS)
+                // would escape and abort the compile.
+                this.name = "ErrnoError";
                 this.node = node;
                 this.setErrno(errno);
             }
@@ -76,12 +81,15 @@ export default class EmProcess extends AsyncInitializable(Process) {
                 return ERRNO_CODES[this.errno];
             }
         }
-        Object.keys(FS.genericErrors).forEach((code) => {
-            code = parseInt(code);
-            Object.defineProperty(FS.genericErrors, code, {
-                get: () => new FS.ErrnoError(code)
+        // FS.genericErrors was removed in emscripten 3.1.74; guard for it.
+        if (FS.genericErrors) {
+            Object.keys(FS.genericErrors).forEach((code) => {
+                code = parseInt(code);
+                Object.defineProperty(FS.genericErrors, code, {
+                    get: () => new FS.ErrnoError(code)
+                });
             });
-        });
+        }
     }
 
     get FS() {
