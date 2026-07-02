@@ -312,15 +312,33 @@ class QuickNode {
     toString(){ return this.href; } get pathname(){ return this.href.replace(/^file:\/\//,''); }
   };
   // vm shim: emscripten's compiler evaluates its OWN trusted settings.js and
-  // library-JS macros via node:vm — indirect eval mirrors Node's runInContext in
-  // the shared global (as the prior emception shim did). Sandboxed inside WASM.
+  // library-JS macros via node:vm. compiler.mjs's module functions (hasExportedSymbol,
+  // etc.) close over the module globals that hold the Set-converted settings, so we must
+  // NOT overwrite globalThis with a context's stale arrays. runInContext uses a
+  // with()-scoped eval: macro code finds the context's helpers, while functions it calls
+  // still read their own module globals. runInNewContext (settings.js) evals in the
+  // shared global so `var` decls become globals (applySettings mirrors them). Sandboxed
+  // inside WASM.
   const iEval = eval;
   q.vm = {
-    createContext:(o)=>{ o=o||{}; Object.assign(globalThis,o); return o; },
-    runInThisContext:(code)=>iEval(String(code)),
-    runInContext:(code,ctx)=>{ if(ctx) Object.assign(globalThis,ctx); return iEval(String(code)); },
-    runInNewContext:(code,ctx)=>{ if(ctx) Object.assign(globalThis,ctx); return iEval(String(code)); },
+    // compileTimeContext IS globalThis: emscripten library JS files define helper
+    // functions (e.g. wrapSyscallFunction) at top level that LATER library files' macros
+    // reference, so those definitions must persist across runInContext calls. Node gets
+    // this because the vm context is the global object for those evals. Using globalThis
+    // as the context (indirect eval) gives the same persistence; the settings Sets built
+    // on globalThis (compiler.mjs line ~54) are read correctly by module functions.
+    createContext:(o)=>{ if (o) Object.assign(globalThis, o); return globalThis; },
+    runInThisContext:(code)=> iEval(String(code)),
+    runInContext:(code,ctx)=> { if (ctx && ctx !== globalThis) Object.assign(globalThis, ctx); try { return iEval(String(code)); } catch(e){ try{ globalThis.console.error("[vm.runInContext] " + (e&&e.name?e.name:"Error") + ": " + (e&&e.message?e.message:String(e)) + " | STACK: " + (e&&e.stack?e.stack:"")); }catch(_){} throw e; } },
+    runInNewContext:(code)=> iEval(String(code)),
   };
+  // Node stream methods emscripten's error path calls (process.stdout.once("drain",...)).
+  for (const s of [globalThis.process && globalThis.process.stdout, globalThis.process && globalThis.process.stderr]) {
+    if (!s) continue;
+    if (!s.once) s.once = function(ev, cb){ if (typeof cb === "function") cb(); return s; };
+    if (!s.on)   s.on   = function(){ return s; };
+    if (!s.end)  s.end  = function(){ return s; };
+  }
 })();
 )JS");
 
@@ -436,7 +454,7 @@ class QuickNode {
 
 int main(int argc, char ** argv) {
     bool success = true;
-    QuickNode qn{"14.15.5"};
+    QuickNode qn{"16.20.0"};
 
     std::vector<std::string> args(argc);
     for (size_t i = 0; i < args.size(); ++i) {
